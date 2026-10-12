@@ -1,0 +1,70 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>ZombieTz</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="game">
+    <canvas id="canvas" width="450" height="800"></canvas>
+
+    <section id="menu" class="screen">
+      <div class="menu-card">
+        <h1>ZOMBIE<span>TZ</span></h1>
+        <p class="subtitle">SURVIVE THE APOCALYPSE</p>
+
+        <button id="playBtn" class="menu-button">
+          <img src="assets/Play.png" alt="" onerror="this.style.display='none'">
+          PLAY
+        </button>
+
+        <button id="shopBtn" class="menu-button secondary">
+          <img src="assets/Shop.png" alt="" onerror="this.style.display='none'">
+          SHOP
+        </button>
+
+        <div class="gold">● <span id="menuGold">0</span> GOLD</div>
+      </div>
+    </section>
+
+    <section id="shop" class="screen hidden">
+      <div class="menu-card">
+        <h2>SHOP</h2>
+        <p>Your gold: <b id="shopGold">0</b></p>
+        <p>More items coming soon!</p>
+        <button id="backBtn" class="menu-button">BACK</button>
+      </div>
+    </section>
+
+    <section id="gameOver" class="screen hidden">
+      <div class="menu-card">
+        <h2>GAME OVER</h2>
+        <p>Zombies reached your car!</p>
+        <p>Gold earned: <b id="earned">0</b></p>
+        <button id="retryBtn" class="menu-button">PLAY AGAIN</button>
+        <button id="homeBtn" class="menu-button secondary">MAIN MENU</button>
+      </div>
+    </section>
+
+    <div id="hud" class="hidden">
+      <div class="hud-top">
+        <div class="hud-box">WAVE <span id="wave">1</span></div>
+        <div class="hud-box gold">● <span id="gold">0</span> GOLD</div>
+      </div>
+
+      <div id="notice">ONE SHOT. ONE ZOMBIE.</div>
+
+      <div class="controls">
+        <button id="leftBtn" class="control">◀</button>
+        <button id="shootBtn" class="control shoot">SHOOT</button>
+        <button id="rightBtn" class="control">▶</button>
+      </div>
+    </div>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
