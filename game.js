@@ -1,15 +1,18 @@
 
-const canvas = document.getElementById("canvas");
+const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 
-const W = canvas.width;
-const H = canvas.height;
-const laneX = [W / 6, W / 2, W * 5 / 6];
+const goldText = document.getElementById("gold");
+const shopGold = document.getElementById("shopGold");
+const finalGold = document.getElementById("finalGold");
 
-const $ = id => document.getElementById(id);
+const mainMenu = document.getElementById("mainMenu");
+const shopScreen = document.getElementById("shopScreen");
+const gameOverScreen = document.getElementById("gameOver");
+const controls = document.getElementById("controls");
+const hud = document.getElementById("hud");
 
-const assets = {};
-
+// Images are stored in the repository root.
 const files = {
   road: "Road1.png",
   car: "Car1.png",
@@ -18,327 +21,334 @@ const files = {
   zombie2: "Zombie3.png"
 };
 
-for (const [key, file] of Object.entries(files)) {
+const images = {};
+
+for (const [key, filename] of Object.entries(files)) {
   const img = new Image();
-  img.src = "assets/" + file;
-  img.onload = () => assets[key] = img;
+  img.src = filename;
+  images[key] = img;
 }
 
-let state = "menu";
-let coins = Number(localStorage.getItem("zombietzGold") || 0);
-let earned = 0;
-let lane = 1;
+let W = 0;
+let H = 0;
+let running = false;
+let animationId = null;
+let lastTime = 0;
+let gold = 0;
+let roadOffset = 0;
 let zombies = [];
 let bullets = [];
-let roadOffset = 0;
-let shotCooldown = 0;
-let lastTime = 0;
-let wave = 1;
-let noticeTimer = 0;
+let playerLane = 1;
+let shootCooldown = 0;
 
-const carY = 665;
-const carW = 58;
-const carH = 92;
+const player = {
+  y: 0,
+  width: 0,
+  height: 0
+};
 
-function updateGold() {
-  $("gold").textContent = coins;
-  $("menuGold").textContent = coins;
-  $("shopGold").textContent = coins;
-  localStorage.setItem("zombietzGold", coins);
+function resizeCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  W = window.innerWidth;
+  H = window.innerHeight;
+
+  canvas.width = Math.floor(W * dpr);
+  canvas.height = Math.floor(H * dpr);
+
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  player.width = Math.min(W * 0.17, 95);
+  player.height = player.width * 1.35;
+  player.y = H * 0.70;
 }
 
-function showScreen(name) {
-  ["menu", "shop", "gameOver"].forEach(id => {
-    $(id).classList.toggle("hidden", id !== name);
-  });
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
 
-  $("hud").classList.toggle("hidden", name !== "playing");
+function roadBounds() {
+  const roadWidth = W * 0.84;
+  return {
+    x: (W - roadWidth) / 2,
+    width: roadWidth,
+    laneWidth: roadWidth / 3
+  };
 }
 
-function startGame() {
-  state = "playing";
-  lane = 1;
-  zombies = [];
-  bullets = [];
-  earned = 0;
-  wave = 1;
-  shotCooldown = 0;
-  roadOffset = 0;
-
-  spawnTwoZombies();
-  showScreen("playing");
-  $("wave").textContent = wave;
+function laneCenter(lane) {
+  const road = roadBounds();
+  return road.x + road.laneWidth * lane + road.laneWidth / 2;
 }
 
-function spawnTwoZombies() {
-  // Select two different lanes; the third lane remains empty.
-  const chosen = [0, 1, 2]
-    .sort(() => Math.random() - 0.5)
-    .slice(0, 2);
+function drawImageCover(img, x, y, width, height) {
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, x, y, width, height);
+  }
+}
 
-  zombies = chosen.map((zLane, i) => ({
-    lane: zLane,
-    x: laneX[zLane],
-    y: -80 - i * 100,
-    type: Math.floor(Math.random() * 3),
-    speed: 65 + Math.random() * 20
+function drawRoad(delta) {
+  const road = roadBounds();
+
+  if (images.road.complete && images.road.naturalWidth > 0) {
+    const img = images.road;
+    const tileHeight = Math.max(H * 0.8, 250);
+    roadOffset = (roadOffset + delta * 0.12) % tileHeight;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(road.x, 0, road.width, H);
+    ctx.clip();
+
+    for (let y = -tileHeight + roadOffset; y < H; y += tileHeight) {
+      ctx.drawImage(img, road.x, y, road.width, tileHeight);
+    }
+    ctx.restore();
+  } else {
+    ctx.fillStyle = "#47653b";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = "#555";
+    ctx.fillRect(road.x, 0, road.width, H);
+  }
+
+  // Three-lane markings.
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.72)";
+  ctx.lineWidth = 3;
+  ctx.setLineDash([28, 24]);
+
+  for (let i = 1; i <= 2; i++) {
+    const x = road.x + road.laneWidth * i;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function makeZombies() {
+  // Two zombies occupy two different lanes; one lane remains empty.
+  const lanes = [0, 2];
+
+  zombies = lanes.map((lane, index) => ({
+    lane,
+    y: H * (index === 0 ? 0.16 : 0.32),
+    type: index,
+    width: Math.min(roadBounds().laneWidth * 0.9, 100),
+    height: Math.min(roadBounds().laneWidth * 1.05, 115),
+    alive: true
   }));
 }
 
-function drawRoad(dt) {
-  roadOffset = (roadOffset + dt * 170) % 64;
+function drawZombie(zombie) {
+  const img = images["zombie" + zombie.type];
+  const x = laneCenter(zombie.lane) - zombie.width / 2;
 
-  if (assets.road) {
-    // Road image should be a top-down, three-lane road.
-    ctx.drawImage(assets.road, 0, 0, W, H);
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, x, zombie.y, zombie.width, zombie.height);
   } else {
-    ctx.fillStyle = "#303530";
-    ctx.fillRect(0, 0, W, H);
-
-    ctx.fillStyle = "#424842";
-    ctx.fillRect(25, 0, W - 50, H);
-  }
-
-  // Keep all three lanes clearly visible.
-  ctx.save();
-  ctx.strokeStyle = "#ded8a5";
-  ctx.lineWidth = 3;
-  ctx.setLineDash([35, 29]);
-  ctx.lineDashOffset = -roadOffset;
-
-  ctx.beginPath();
-  ctx.moveTo(W / 3, 0);
-  ctx.lineTo(W / 3, H);
-  ctx.moveTo(W * 2 / 3, 0);
-  ctx.lineTo(W * 2 / 3, H);
-  ctx.stroke();
-  ctx.restore();
-
-  ctx.fillStyle = "#11181199";
-  ctx.fillRect(0, 0, 18, H);
-  ctx.fillRect(W - 18, 0, 18, H);
-}
-
-function drawCar() {
-  if (assets.car) {
-    ctx.drawImage(
-      assets.car,
-      laneX[lane] - carW / 2,
-      carY - carH / 2,
-      carW,
-      carH
-    );
-  } else {
-    // Temporary car visual until Car1.png is loaded.
-    ctx.fillStyle = "#75cf50";
-    ctx.fillRect(laneX[lane] - 23, carY - 44, 46, 88);
-
-    ctx.fillStyle = "#b7d6d9";
-    ctx.fillRect(laneX[lane] - 15, carY - 25, 30, 19);
-
-    ctx.fillStyle = "#151a15";
-    ctx.fillRect(laneX[lane] - 18, carY + 10, 36, 17);
+    ctx.fillStyle = "#68b34a";
+    ctx.fillRect(x, zombie.y, zombie.width, zombie.height);
+    ctx.fillStyle = "#fff";
+    ctx.fillText("Z", x + zombie.width / 2, zombie.y + zombie.height / 2);
   }
 }
 
-function drawZombie(z) {
-  const img = assets["zombie" + z.type];
-  const w = 62;
-  const h = 76;
+function drawPlayer() {
+  const x = laneCenter(playerLane) - player.width / 2;
 
-  if (img) {
-    ctx.drawImage(img, z.x - w / 2, z.y - h / 2, w, h);
+  if (images.car.complete && images.car.naturalWidth > 0) {
+    ctx.drawImage(images.car, x, player.y, player.width, player.height);
   } else {
-    // Temporary zombie visual if images haven't loaded.
-    ctx.fillStyle = ["#82a96a", "#9b9b63", "#527e4d"][z.type];
-
-    ctx.beginPath();
-    ctx.ellipse(z.x, z.y, 23, 29, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "#1a2517";
-    ctx.fillRect(z.x - 13, z.y - 8, 8, 6);
-    ctx.fillRect(z.x + 5, z.y - 8, 8, 6);
-
-    ctx.fillStyle = "#d8e3c7";
-    ctx.fillRect(z.x - 10, z.y + 9, 20, 5);
+    ctx.fillStyle = "#e4c33b";
+    ctx.fillRect(x, player.y, player.width, player.height);
   }
 }
 
 function drawBullets() {
-  ctx.strokeStyle = "#f9ffda";
-  ctx.lineWidth = 5;
-  ctx.lineCap = "round";
+  ctx.fillStyle = "#ffec70";
 
-  bullets.forEach(b => {
-    ctx.beginPath();
-    ctx.moveTo(b.x, b.y + 10);
-    ctx.lineTo(b.x, b.y - 10);
-    ctx.stroke();
-  });
-}
-
-function move(dir) {
-  if (state !== "playing") return;
-  lane = Math.max(0, Math.min(2, lane + dir));
-}
-
-function shoot() {
-  if (state !== "playing" || shotCooldown > 0) return;
-
-  shotCooldown = 0.25;
-
-  bullets.push({
-    x: laneX[lane],
-    y: carY - 55,
-    speed: 600
-  });
-
-  // One shot kills one zombie in the player's lane.
-  const target = zombies
-    .filter(z => z.lane === lane && z.y < carY - 35)
-    .sort((a, b) => b.y - a.y)[0];
-
-  if (target) {
-    zombies = zombies.filter(z => z !== target);
-
-    coins += 10;
-    earned += 10;
-    updateGold();
-
-    $("notice").textContent = "+10 GOLD";
-    noticeTimer = 0.9;
-
-    wave = 1 + Math.floor(earned / 100);
-    $("wave").textContent = wave;
-  } else {
-    $("notice").textContent = "AIM AT A ZOMBIE'S LANE";
-    noticeTimer = 0.7;
+  for (const bullet of bullets) {
+    ctx.fillRect(bullet.x - 3, bullet.y, 6, 18);
   }
 }
 
-function endGame() {
-  state = "gameOver";
-  $("earned").textContent = earned;
-  showScreen("gameOver");
-}
+function update(delta) {
+  roadOffset += delta * 0.12;
+  shootCooldown = Math.max(0, shootCooldown - delta);
 
-function update(dt) {
-  if (state !== "playing") return;
+  for (const zombie of zombies) {
+    if (!zombie.alive) continue;
 
-  shotCooldown = Math.max(0, shotCooldown - dt);
-  roadOffset += dt * 170;
+    zombie.y += delta * 0.025;
 
-  bullets.forEach(b => b.y -= b.speed * dt);
-  bullets = bullets.filter(b => b.y > -20);
-
-  zombies.forEach(z => {
-    z.y += z.speed * dt;
-  });
-
-  // A zombie reaching the player's car ends the run.
-  if (zombies.some(z => z.y + 35 >= carY - carH / 2)) {
-    endGame();
-    return;
+    if (zombie.y + zombie.height >= player.y) {
+      endGame();
+      return;
+    }
   }
 
-  // Refill defeated zombies in an unoccupied lane.
-  // Never put two zombies in the same lane.
-  while (zombies.length < 2) {
-    const occupied = zombies.map(z => z.lane);
-    const free = [0, 1, 2].filter(l => !occupied.includes(l));
+  for (const bullet of bullets) {
+    bullet.y -= delta * 0.65;
 
-    if (!free.length) break;
+    const target = zombies.find(zombie =>
+      zombie.alive &&
+      zombie.lane === bullet.lane &&
+      zombie.y < bullet.y &&
+      zombie.y + zombie.height > bullet.y - 30
+    );
 
-    const newLane = free[Math.floor(Math.random() * free.length)];
-
-    zombies.push({
-      lane: newLane,
-      x: laneX[newLane],
-      y: -85,
-      type: Math.floor(Math.random() * 3),
-      speed: 65 + Math.random() * 20
-    });
+    if (target) {
+      target.alive = false;
+      bullet.hit = true;
+      gold += 10;
+      goldText.textContent = gold;
+    }
   }
 
-  if (noticeTimer > 0) {
-    noticeTimer -= dt;
+  bullets = bullets.filter(bullet => bullet.y > -30 && !bullet.hit);
 
-    if (noticeTimer <= 0) {
-      $("notice").textContent = "ONE SHOT. ONE ZOMBIE.";
+  // Spawn a replacement in the same lane after a zombie is killed.
+  for (let i = 0; i < zombies.length; i++) {
+    if (!zombies[i].alive) {
+      const lane = zombies[i].lane;
+      const type = Math.floor(Math.random() * 3);
+
+      zombies[i] = {
+        lane,
+        y: -120,
+        type,
+        width: Math.min(roadBounds().laneWidth * 0.9, 100),
+        height: Math.min(roadBounds().laneWidth * 1.05, 115),
+        alive: true
+      };
     }
   }
 }
 
-function render(dt) {
+function draw(delta) {
   ctx.clearRect(0, 0, W, H);
-  drawRoad(dt);
 
-  if (state === "playing") {
-    drawBullets();
-    zombies.forEach(drawZombie);
-    drawCar();
+  drawRoad(delta);
+
+  for (const zombie of zombies) {
+    if (zombie.alive) drawZombie(zombie);
+  }
+
+  drawBullets();
+  drawPlayer();
+}
+
+function gameLoop(timestamp) {
+  if (!running) return;
+
+  const delta = Math.min(timestamp - (lastTime || timestamp), 40);
+  lastTime = timestamp;
+
+  update(delta);
+  draw(delta);
+
+  if (running) {
+    animationId = requestAnimationFrame(gameLoop);
   }
 }
 
-function loop(time) {
-  const dt = Math.min((time - lastTime) / 1000 || 0, 0.04);
-  lastTime = time;
+function startGame() {
+  if (animationId) cancelAnimationFrame(animationId);
 
-  update(dt);
-  render(dt);
+  gold = 0;
+  goldText.textContent = "0";
+  playerLane = 1;
+  bullets = [];
+  roadOffset = 0;
+  shootCooldown = 0;
 
-  requestAnimationFrame(loop);
+  makeZombies();
+
+  mainMenu.classList.add("hidden");
+  shopScreen.classList.add("hidden");
+  gameOverScreen.classList.add("hidden");
+  controls.classList.remove("hidden");
+  hud.classList.remove("hidden");
+
+  running = true;
+  lastTime = 0;
+  animationId = requestAnimationFrame(gameLoop);
 }
 
-$("playBtn").addEventListener("click", startGame);
+function shoot() {
+  if (!running || shootCooldown > 0) return;
 
-$("shopBtn").addEventListener("click", () => {
-  showScreen("shop");
-  updateGold();
+  shootCooldown = 250;
+
+  bullets.push({
+    lane: playerLane,
+    x: laneCenter(playerLane),
+    y: player.y
+  });
+}
+
+function moveLeft() {
+  if (running) playerLane = Math.max(0, playerLane - 1);
+}
+
+function moveRight() {
+  if (running) playerLane = Math.min(2, playerLane + 1);
+}
+
+function endGame() {
+  running = false;
+
+  if (animationId) cancelAnimationFrame(animationId);
+
+  controls.classList.add("hidden");
+  gameOverScreen.classList.remove("hidden");
+  finalGold.textContent = gold;
+}
+
+function goHome() {
+  running = false;
+
+  if (animationId) cancelAnimationFrame(animationId);
+
+  controls.classList.add("hidden");
+  shopScreen.classList.add("hidden");
+  gameOverScreen.classList.add("hidden");
+  mainMenu.classList.remove("hidden");
+  hud.classList.add("hidden");
+}
+
+document.getElementById("playButton").addEventListener("click", startGame);
+
+document.getElementById("shopButton").addEventListener("click", () => {
+  shopGold.textContent = gold;
+  mainMenu.classList.add("hidden");
+  shopScreen.classList.remove("hidden");
 });
 
-$("backBtn").addEventListener("click", () => {
-  showScreen("menu");
+document.getElementById("backButton").addEventListener("click", () => {
+  shopScreen.classList.add("hidden");
+  mainMenu.classList.remove("hidden");
 });
 
-$("retryBtn").addEventListener("click", startGame);
+document.getElementById("restartButton").addEventListener("click", startGame);
+document.getElementById("homeButton").addEventListener("click", goHome);
+document.getElementById("menuButton").addEventListener("click", goHome);
 
-$("homeBtn").addEventListener("click", () => {
-  state = "menu";
-  showScreen("menu");
+document.getElementById("leftButton").addEventListener("pointerdown", moveLeft);
+document.getElementById("rightButton").addEventListener("pointerdown", moveRight);
+document.getElementById("shootButton").addEventListener("pointerdown", shoot);
+
+// Keyboard controls for testing on a computer.
+window.addEventListener("keydown", event => {
+  if (event.key === "ArrowLeft" || event.key.toLowerCase() === "a") moveLeft();
+  if (event.key === "ArrowRight" || event.key.toLowerCase() === "d") moveRight();
+  if (event.code === "Space") shoot();
 });
 
-$("leftBtn").addEventListener("pointerdown", e => {
-  e.preventDefault();
-  move(-1);
-});
-
-$("rightBtn").addEventListener("pointerdown", e => {
-  e.preventDefault();
-  move(1);
-});
-
-$("shootBtn").addEventListener("pointerdown", e => {
-  e.preventDefault();
-  shoot();
-});
-
-window.addEventListener("keydown", e => {
-  if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") {
-    move(-1);
-  }
-
-  if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") {
-    move(1);
-  }
-
-  if (e.code === "Space") {
-    e.preventDefault();
-    shoot();
-  }
-});
-
-updateGold();
-showScreen("menu");
-requestAnimationFrame(loop);
+hud.classList.add("hidden");
